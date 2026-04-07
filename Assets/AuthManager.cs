@@ -29,16 +29,61 @@ public class AuthManager : MonoBehaviour
 
     public GameObject[] availablePrefabs;
 
-    // ⭐ NIEUW: container waar alle wereld objecten in komen
     public Transform worldObjectsContainer;
 
     private Dictionary<string, string> users = new Dictionary<string, string>();
     private string currentUser;
     private string currentWorld;
 
-    // ⭐ lijst met objecten in de wereld
     private List<GameObject> spawnedObjects = new List<GameObject>();
 
+    // ================= START =================
+    void Start()
+    {
+        // Laad alle opgeslagen gebruikers in zodra de game start
+        LoadUsers();
+    }
+
+    // ================= DATA OPSLAAN & INLADEN (USERS) =================
+    void LoadUsers()
+    {
+        string savedUsers = PlayerPrefs.GetString("AllUsers", "");
+
+        if (string.IsNullOrEmpty(savedUsers)) return;
+
+        // Formaat is: User1:Pass1,User2:Pass2
+        string[] userPairs = savedUsers.Split(',');
+
+        foreach (string pair in userPairs)
+        {
+            if (string.IsNullOrEmpty(pair)) continue;
+
+            string[] userData = pair.Split(':');
+            if (userData.Length == 2)
+            {
+                // Als de user nog niet is toegevoegd, zet deze erin
+                if (!users.ContainsKey(userData[0]))
+                {
+                    users.Add(userData[0], userData[1]);
+                }
+            }
+        }
+    }
+
+    void SaveUsers()
+    {
+        List<string> userPairs = new List<string>();
+
+        foreach (KeyValuePair<string, string> user in users)
+        {
+            userPairs.Add(user.Key + ":" + user.Value);
+        }
+
+        PlayerPrefs.SetString("AllUsers", string.Join(",", userPairs));
+        PlayerPrefs.Save();
+    }
+
+    // ================= REGISTER =================
     public void Register()
     {
         string username = usernameInput.text;
@@ -57,10 +102,15 @@ public class AuthManager : MonoBehaviour
         }
 
         users.Add(username, password);
+
+        // Sla de actuele gebruikerslijst op!
+        SaveUsers();
+
         registerErrorText.text = "Registratie succesvol!";
         ShowLogin();
     }
 
+    // ================= LOGIN =================
     public void Login()
     {
         string username = loginUsernameInput.text;
@@ -92,6 +142,7 @@ public class AuthManager : MonoBehaviour
         return hasLower && hasUpper && hasDigit && hasSpecial;
     }
 
+    // ================= CREATE WORLD =================
     public void CreateWorld()
     {
         string worldName = worldNameInput.text;
@@ -131,6 +182,7 @@ public class AuthManager : MonoBehaviour
         OpenWorld(worldName);
     }
 
+    // ================= LOAD WORLDS =================
     void LoadWorlds()
     {
         foreach (Transform child in worldsContainer)
@@ -151,9 +203,12 @@ public class AuthManager : MonoBehaviour
         }
     }
 
+    // ================= OPEN WORLD =================
     public void OpenWorld(string worldName)
     {
         currentWorld = worldName;
+
+        ClearWorldObjects(); // ⭐ BELANGRIJK FIX
 
         homePanel.SetActive(false);
         worldPanel.SetActive(true);
@@ -163,8 +218,15 @@ public class AuthManager : MonoBehaviour
         LoadObjects();
     }
 
+    // ================= ADD OBJECT =================
     public void AddObject(int index)
     {
+        Vector3 pos = new Vector3(0, 0, 0);
+
+        string data = index + "|" +
+                      pos.x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
+                      pos.y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
         string key = currentUser + "_" + currentWorld + "_objects";
         string saved = PlayerPrefs.GetString(key, "");
 
@@ -172,14 +234,15 @@ public class AuthManager : MonoBehaviour
         if (saved != "")
             objects = new List<string>(saved.Split(','));
 
-        objects.Add(index.ToString());
+        objects.Add(data);
 
         PlayerPrefs.SetString(key, string.Join(",", objects));
         PlayerPrefs.Save();
 
-        SpawnObject(index);
+        SpawnObject(index, pos);
     }
 
+    // ================= LOAD OBJECTS (GEFIXT) =================
     void LoadObjects()
     {
         string key = currentUser + "_" + currentWorld + "_objects";
@@ -191,20 +254,45 @@ public class AuthManager : MonoBehaviour
 
         foreach (string obj in objects)
         {
-            int index = int.Parse(obj);
-            SpawnObject(index);
+            if (string.IsNullOrEmpty(obj)) continue;
+
+            string[] data = obj.Split('|');
+
+            if (data.Length < 3)
+            {
+                Debug.LogWarning("Foute data overgeslagen: " + obj);
+                continue;
+            }
+
+            int index;
+            if (!int.TryParse(data[0], out index)) continue;
+
+            if (index < 0 || index >= availablePrefabs.Length)
+            {
+                Debug.LogWarning("Index fout: " + index);
+                continue;
+            }
+
+            float x, y;
+            if (!float.TryParse(data[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out x) ||
+                !float.TryParse(data[2], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out y))
+                continue;
+
+            Vector3 pos = new Vector3(x, y, 0);
+
+            SpawnObject(index, pos);
         }
     }
 
-    void SpawnObject(int index)
+    // ================= SPAWN =================
+    void SpawnObject(int index, Vector3 position)
     {
         GameObject obj = Instantiate(
             availablePrefabs[index],
-            new Vector3(0, 0, 0),
+            position,
             Quaternion.identity
         );
 
-        // ⭐ object onder world container plaatsen
         obj.transform.SetParent(worldObjectsContainer);
 
         if (obj.GetComponent<Collider2D>() == null)
@@ -216,7 +304,42 @@ public class AuthManager : MonoBehaviour
         spawnedObjects.Add(obj);
     }
 
-    // ⭐ verwijder alle objecten uit de wereld
+    // ================= SAVE OBJECT POSITIONS =================
+    public void SaveWorldObjects()
+    {
+        string key = currentUser + "_" + currentWorld + "_objects";
+
+        List<string> objects = new List<string>();
+
+        foreach (GameObject obj in spawnedObjects)
+        {
+            int index = -1;
+
+            for (int i = 0; i < availablePrefabs.Length; i++)
+            {
+                if (obj.name.Contains(availablePrefabs[i].name))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index == -1) continue;
+
+            Vector3 pos = obj.transform.position;
+
+            string data = index + "|" +
+                          pos.x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
+                          pos.y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            objects.Add(data);
+        }
+
+        PlayerPrefs.SetString(key, string.Join(",", objects));
+        PlayerPrefs.Save();
+    }
+
+    // ================= CLEAR =================
     void ClearWorldObjects()
     {
         foreach (GameObject obj in spawnedObjects)
@@ -227,6 +350,7 @@ public class AuthManager : MonoBehaviour
         spawnedObjects.Clear();
     }
 
+    // ================= DELETE =================
     public void DeleteWorld()
     {
         string key = currentUser + "_worlds";
@@ -269,7 +393,8 @@ public class AuthManager : MonoBehaviour
 
     public void BackToHome()
     {
-        // ⭐ objecten verwijderen bij verlaten wereld
+        SaveWorldObjects(); // ⭐ BELANGRIJK
+
         ClearWorldObjects();
 
         worldPanel.SetActive(false);

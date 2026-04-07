@@ -1,21 +1,24 @@
-using System;
+﻿using System;
 using UnityEngine;
 
-/*
-* The GameObject also needs a collider otherwise OnMouseUpAsButton() can not be detected.
-*/
 public class Draggable : MonoBehaviour
 {
     public Transform trans;
 
     private bool isDragging = false;
+    private AuthManager authManager;
 
-    public void StartDragging()
+    void Start()
     {
-        isDragging = true;
+        // ⭐ Zorg dat trans altijd goed staat
+        if (trans == null)
+            trans = transform;
+
+        // ⭐ Nieuwe Unity manier (geen warning meer)
+        authManager = FindFirstObjectByType<AuthManager>();
     }
 
-    public void Update()
+    void Update()
     {
         if (isDragging)
             trans.position = GetMousePosition();
@@ -23,11 +26,16 @@ public class Draggable : MonoBehaviour
 
     private void OnMouseUpAsButton()
     {
+        // Klik = toggle drag aan/uit
         isDragging = !isDragging;
 
+        // ⭐ Wanneer je stopt met slepen → opslaan
         if (!isDragging)
         {
-            // Stopped dragging. Add any logic here that you need for this scenario.
+            if (authManager != null)
+            {
+                authManager.SaveWorldObjects();
+            }
         }
     }
 
@@ -37,5 +45,4 @@ public class Draggable : MonoBehaviour
         positionInWorld.z = 0;
         return positionInWorld;
     }
-
 }
