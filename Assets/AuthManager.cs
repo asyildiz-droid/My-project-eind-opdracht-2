@@ -34,8 +34,6 @@ public class ApiEnvironment
     public string userId;
 }
 
-// ⭐ GEFIXT: Exact deze velden voor The Level Builder!
-// Geen fake ID meer, want dat laat de Postgres database crashen!
 [System.Serializable]
 public class ApiObject
 {
@@ -337,6 +335,7 @@ public class AuthManager : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
+                Debug.Log($"[LOAD] Ontvangen JSON: {request.downloadHandler.text}");
                 ApiObject[] allObjects = CustomJsonHelper.FromJson<ApiObject>(request.downloadHandler.text);
 
                 if (allObjects != null)
@@ -345,13 +344,37 @@ public class AuthManager : MonoBehaviour
                     {
                         if (objData.environment2DId != currentEnvironmentId) continue;
 
-                        if (int.TryParse(objData.prefabId, out int index))
+                        // ⭐ OPLOSSING GEÏNTEGREERD: We zoeken de prefab op NAAM ipv een getal!
+                        int matchedIndex = -1;
+                        for (int i = 0; i < availablePrefabs.Length; i++)
+                        {
+                            if (availablePrefabs[i].name == objData.prefabId)
+                            {
+                                matchedIndex = i;
+                                break;
+                            }
+                        }
+
+                        if (matchedIndex != -1)
                         {
                             Vector3 pos = new Vector3(objData.positionX, objData.positionY, 0f);
-                            SpawnObject(index, pos);
+                            SpawnObject(matchedIndex, pos);
+
+                            // Pas schaal en rotatie netjes toe die we net hebben opgehaald
+                            GameObject spawnedObj = spawnedObjects[spawnedObjects.Count - 1];
+                            spawnedObj.transform.localScale = new Vector3(objData.scaleX, objData.scaleY, 1f);
+                            spawnedObj.transform.eulerAngles = new Vector3(0, 0, objData.rotationZ);
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"Kon Opgeslagen Prefab '{objData.prefabId}' niet vinden in de beschikbare prefab lijst!");
                         }
                     }
                 }
+            }
+            else
+            {
+                Debug.LogError("Error bij het ophalen van de objecten: " + request.error);
             }
         }
     }
@@ -369,7 +392,6 @@ public class AuthManager : MonoBehaviour
 
             string cleanPrefabName = obj.name.Replace("(Clone)", "").Trim();
 
-            // ⭐ GEFIXT: Vult uitsluitend de door Dapper geëiste eigenschappen! Geen vervuilende dummy ID's.
             ApiObject objectData = new ApiObject
             {
                 prefabId = cleanPrefabName,
@@ -379,7 +401,7 @@ public class AuthManager : MonoBehaviour
                 scaleY = obj.transform.localScale.y,
                 rotationZ = obj.transform.eulerAngles.z,
                 sortingLayer = 1,
-                environment2DId = currentEnvironmentId // Expliciet de juiste ingeladen guid ID
+                environment2DId = currentEnvironmentId
             };
 
             string jsonData = JsonUtility.ToJson(objectData);
