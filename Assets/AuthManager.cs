@@ -1,9 +1,41 @@
 ﻿using UnityEngine;
 using TMPro;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using UnityEngine.UI;
+using UnityEngine.Networking;
+using System.Text;
 
+// ================= UNIEKE API MODELLEN (Hernoemd om alle fouten in Unity te voorkomen!) =================
+[System.Serializable]
+public class ApiUserCredentials
+{
+    public string userName;
+    public string password;
+}
+
+[System.Serializable]
+public class ApiEnvironment
+{
+    public string id;
+    public string name;
+    public int maxHeight;
+    public int maxLength;
+    public string userId;
+}
+
+[System.Serializable]
+public class ApiObject
+{
+    public string id;
+    public string environment2DId;
+    public int prefabIndex;
+    public float x;
+    public float y;
+}
+
+// ================= AUTH MANAGER =================
 public class AuthManager : MonoBehaviour
 {
     public TMP_InputField usernameInput;
@@ -31,290 +63,293 @@ public class AuthManager : MonoBehaviour
 
     public Transform worldObjectsContainer;
 
-    private Dictionary<string, string> users = new Dictionary<string, string>();
     private string currentUser;
-    private string currentWorld;
+    private string currentEnvironmentId;
+    private string currentEnvironmentName;
 
     private List<GameObject> spawnedObjects = new List<GameObject>();
 
-    // ================= START =================
-    void Start()
-    {
-        // Laad alle opgeslagen gebruikers in zodra de game start
-        LoadUsers();
-    }
+    // De kloppende Live Render Base URL (Zonder schuine streep op het einde!)
+    private readonly string baseUrl = "https://mysecurebackend.onrender.com";
 
-    // ================= DATA OPSLAAN & INLADEN (USERS) =================
-    void LoadUsers()
-    {
-        string savedUsers = PlayerPrefs.GetString("AllUsers", "");
-
-        if (string.IsNullOrEmpty(savedUsers)) return;
-
-        // Formaat is: User1:Pass1,User2:Pass2
-        string[] userPairs = savedUsers.Split(',');
-
-        foreach (string pair in userPairs)
-        {
-            if (string.IsNullOrEmpty(pair)) continue;
-
-            string[] userData = pair.Split(':');
-            if (userData.Length == 2)
-            {
-                // Als de user nog niet is toegevoegd, zet deze erin
-                if (!users.ContainsKey(userData[0]))
-                {
-                    users.Add(userData[0], userData[1]);
-                }
-            }
-        }
-    }
-
-    void SaveUsers()
-    {
-        List<string> userPairs = new List<string>();
-
-        foreach (KeyValuePair<string, string> user in users)
-        {
-            userPairs.Add(user.Key + ":" + user.Value);
-        }
-
-        PlayerPrefs.SetString("AllUsers", string.Join(",", userPairs));
-        PlayerPrefs.Save();
-    }
-
-    // ================= REGISTER =================
+    // ================= REGISTER & LOGIN =================
     public void Register()
     {
         string username = usernameInput.text;
         string password = passwordInput.text;
 
-        if (users.ContainsKey(username))
-        {
-            registerErrorText.text = "Gebruikersnaam bestaat al.";
-            return;
-        }
-
         if (!IsValidPassword(password))
         {
-            registerErrorText.text = "Wachtwoord voldoet niet aan eisen.";
+            registerErrorText.text = "Wachtwoord voldoet niet aan de eisen (min. 10 tekens, 1H, 1K, 1C, 1 Speciaalteken).";
             return;
         }
 
-        users.Add(username, password);
-
-        // Sla de actuele gebruikerslijst op!
-        SaveUsers();
-
-        registerErrorText.text = "Registratie succesvol!";
-        ShowLogin();
+        registerErrorText.text = "Bezig met registreren...";
+        StartCoroutine(RegisterUserCoroutine(username, password));
     }
 
-    // ================= LOGIN =================
+    private IEnumerator RegisterUserCoroutine(string username, string password)
+    {
+        string url = $"{baseUrl}/api/users/register";
+        string jsonData = JsonUtility.ToJson(new ApiUserCredentials { userName = username, password = password });
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                registerErrorText.text = "Registratie succesvol! Je kunt nu inloggen.";
+                ShowLogin();
+            }
+            else
+            {
+                registerErrorText.text = "Fout bij registratie: " + request.error;
+            }
+        }
+    }
+
     public void Login()
     {
         string username = loginUsernameInput.text;
         string password = loginPasswordInput.text;
 
-        if (!users.ContainsKey(username) || users[username] != password)
+        loginErrorText.text = "Bezig met inloggen...";
+        StartCoroutine(LoginUserCoroutine(username, password));
+    }
+
+    private IEnumerator LoginUserCoroutine(string username, string password)
+    {
+        string url = $"{baseUrl}/api/users/login";
+        string jsonData = JsonUtility.ToJson(new ApiUserCredentials { userName = username, password = password });
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
         {
-            loginErrorText.text = "Gebruikersnaam of wachtwoord incorrect.";
-            return;
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                currentUser = username;
+
+                loginErrorText.text = "";
+                loginPanel.SetActive(false);
+                homePanel.SetActive(true);
+                LoadEnvironments();
+            }
+            else
+            {
+                loginErrorText.text = "Gebruikersnaam of wachtwoord incorrect.";
+            }
         }
-
-        currentUser = username;
-
-        loginPanel.SetActive(false);
-        homePanel.SetActive(true);
-
-        LoadWorlds();
     }
 
     bool IsValidPassword(string password)
     {
         if (password.Length < 10) return false;
-
-        bool hasLower = Regex.IsMatch(password, "[a-z]");
-        bool hasUpper = Regex.IsMatch(password, "[A-Z]");
-        bool hasDigit = Regex.IsMatch(password, "[0-9]");
-        bool hasSpecial = Regex.IsMatch(password, "[^a-zA-Z0-9]");
-
-        return hasLower && hasUpper && hasDigit && hasSpecial;
+        return Regex.IsMatch(password, "[a-z]") && Regex.IsMatch(password, "[A-Z]") &&
+               Regex.IsMatch(password, "[0-9]") && Regex.IsMatch(password, "[^a-zA-Z0-9]");
     }
 
-    // ================= CREATE WORLD =================
+    // ================= WERELDEN (Environment2D) =================
     public void CreateWorld()
     {
-        string worldName = worldNameInput.text;
-
-        if (string.IsNullOrEmpty(worldName) || worldName.Length > 25)
+        string envName = worldNameInput.text;
+        if (string.IsNullOrEmpty(envName) || envName.Length > 25)
         {
             worldErrorText.text = "Naam moet 1-25 karakters zijn.";
             return;
         }
-
-        string key = currentUser + "_worlds";
-        string saved = PlayerPrefs.GetString(key, "");
-
-        List<string> worlds = new List<string>();
-        if (saved != "")
-            worlds = new List<string>(saved.Split(','));
-
-        if (worlds.Contains(worldName))
-        {
-            worldErrorText.text = "Deze wereld bestaat al.";
-            return;
-        }
-
-        if (worlds.Count >= 5)
-        {
-            worldErrorText.text = "Maximaal 5 werelden toegestaan.";
-            return;
-        }
-
-        worlds.Add(worldName);
-        PlayerPrefs.SetString(key, string.Join(",", worlds));
-        PlayerPrefs.Save();
-
-        worldNameInput.text = "";
-        LoadWorlds();
-
-        OpenWorld(worldName);
+        worldErrorText.text = "Wereld aanmaken...";
+        StartCoroutine(CreateEnvironmentCoroutine(envName));
     }
 
-    // ================= LOAD WORLDS =================
-    void LoadWorlds()
+    private IEnumerator CreateEnvironmentCoroutine(string envName)
     {
-        foreach (Transform child in worldsContainer)
-            Destroy(child.gameObject);
+        string url = $"{baseUrl}/Environment2D";
 
-        string key = currentUser + "_worlds";
-        string saved = PlayerPrefs.GetString(key, "");
-
-        if (saved == "") return;
-
-        string[] worlds = saved.Split(',');
-
-        foreach (string world in worlds)
+        ApiEnvironment newEnv = new ApiEnvironment
         {
-            GameObject button = Instantiate(worldButtonPrefab, worldsContainer);
-            button.GetComponentInChildren<TMP_Text>().text = world;
-            button.GetComponent<Button>().onClick.AddListener(() => OpenWorld(world));
+            name = envName,
+            maxHeight = 10,
+            maxLength = 10,
+            userId = currentUser
+        };
+
+        string jsonData = JsonUtility.ToJson(newEnv);
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                worldNameInput.text = "";
+                worldErrorText.text = "";
+                LoadEnvironments();
+            }
+            else
+            {
+                worldErrorText.text = "Fout bij aanmaken wereld.";
+                Debug.LogError(request.error);
+            }
         }
     }
 
-    // ================= OPEN WORLD =================
-    public void OpenWorld(string worldName)
+    void LoadEnvironments()
     {
-        currentWorld = worldName;
+        StartCoroutine(LoadEnvironmentsCoroutine());
+    }
 
-        ClearWorldObjects(); // ⭐ BELANGRIJK FIX
+    private IEnumerator LoadEnvironmentsCoroutine()
+    {
+        string url = $"{baseUrl}/Environment2D";
+
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                foreach (Transform child in worldsContainer)
+                {
+                    Destroy(child.gameObject);
+                }
+
+                ApiEnvironment[] environments = CustomJsonHelper.FromJson<ApiEnvironment>(request.downloadHandler.text);
+
+                if (environments != null)
+                {
+                    foreach (ApiEnvironment env in environments)
+                    {
+                        if (env.userId != currentUser) continue;
+
+                        GameObject button = Instantiate(worldButtonPrefab, worldsContainer);
+                        button.GetComponentInChildren<TMP_Text>().text = env.name;
+
+                        string clickEnvId = env.id;
+                        string clickEnvName = env.name;
+                        button.GetComponent<Button>().onClick.AddListener(() => OpenWorld(clickEnvId, clickEnvName));
+                    }
+                }
+            }
+        }
+    }
+
+    public void OpenWorld(string envId, string envName)
+    {
+        currentEnvironmentId = envId;
+        currentEnvironmentName = envName;
+
+        ClearWorldObjects();
 
         homePanel.SetActive(false);
         worldPanel.SetActive(true);
-
-        worldTitleText.text = "Wereld: " + worldName;
+        worldTitleText.text = "Wereld: " + envName;
 
         LoadObjects();
     }
 
-    // ================= ADD OBJECT =================
-    public void AddObject(int index)
+    public void DeleteWorld()
     {
-        Vector3 pos = new Vector3(0, 0, 0);
-
-        string data = index + "|" +
-                      pos.x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
-                      pos.y.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-        string key = currentUser + "_" + currentWorld + "_objects";
-        string saved = PlayerPrefs.GetString(key, "");
-
-        List<string> objects = new List<string>();
-        if (saved != "")
-            objects = new List<string>(saved.Split(','));
-
-        objects.Add(data);
-
-        PlayerPrefs.SetString(key, string.Join(",", objects));
-        PlayerPrefs.Save();
-
-        SpawnObject(index, pos);
+        StartCoroutine(DeleteEnvironmentCoroutine());
     }
 
-    // ================= LOAD OBJECTS (GEFIXT) =================
-    void LoadObjects()
+    private IEnumerator DeleteEnvironmentCoroutine()
     {
-        string key = currentUser + "_" + currentWorld + "_objects";
-        string saved = PlayerPrefs.GetString(key, "");
+        string url = $"{baseUrl}/Environment2D/{currentEnvironmentId}";
 
-        if (saved == "") return;
-
-        string[] objects = saved.Split(',');
-
-        foreach (string obj in objects)
+        using (UnityWebRequest request = UnityWebRequest.Delete(url))
         {
-            if (string.IsNullOrEmpty(obj)) continue;
+            yield return request.SendWebRequest();
 
-            string[] data = obj.Split('|');
-
-            if (data.Length < 3)
+            if (request.result == UnityWebRequest.Result.Success)
             {
-                Debug.LogWarning("Foute data overgeslagen: " + obj);
-                continue;
+                ClearWorldObjects();
+                worldPanel.SetActive(false);
+                homePanel.SetActive(true);
+                LoadEnvironments();
             }
-
-            int index;
-            if (!int.TryParse(data[0], out index)) continue;
-
-            if (index < 0 || index >= availablePrefabs.Length)
+            else
             {
-                Debug.LogWarning("Index fout: " + index);
-                continue;
+                Debug.LogError("Fout bij verwijderen wereld.");
             }
-
-            float x, y;
-            if (!float.TryParse(data[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out x) ||
-                !float.TryParse(data[2], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out y))
-                continue;
-
-            Vector3 pos = new Vector3(x, y, 0);
-
-            SpawnObject(index, pos);
         }
     }
 
-    // ================= SPAWN =================
+    // ================= OBJECTEN (Object2D) =================
+    public void AddObject(int index)
+    {
+        SpawnObject(index, new Vector3(0, 0, 0));
+    }
+
     void SpawnObject(int index, Vector3 position)
     {
-        GameObject obj = Instantiate(
-            availablePrefabs[index],
-            position,
-            Quaternion.identity
-        );
+        if (index < 0 || index >= availablePrefabs.Length) return;
 
+        GameObject obj = Instantiate(availablePrefabs[index], position, Quaternion.identity);
         obj.transform.SetParent(worldObjectsContainer);
 
-        if (obj.GetComponent<Collider2D>() == null)
-            obj.AddComponent<BoxCollider2D>();
-
-        if (obj.GetComponent<Draggable>() == null)
-            obj.AddComponent<Draggable>();
+        if (obj.GetComponent<Collider2D>() == null) obj.AddComponent<BoxCollider2D>();
 
         spawnedObjects.Add(obj);
     }
 
-    // ================= SAVE OBJECT POSITIONS =================
+    void LoadObjects()
+    {
+        StartCoroutine(LoadObjectsCoroutine());
+    }
+
+    private IEnumerator LoadObjectsCoroutine()
+    {
+        string url = $"{baseUrl}/Object2D";
+
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                ApiObject[] allObjects = CustomJsonHelper.FromJson<ApiObject>(request.downloadHandler.text);
+
+                if (allObjects != null)
+                {
+                    foreach (ApiObject objData in allObjects)
+                    {
+                        if (objData.environment2DId != currentEnvironmentId) continue;
+
+                        Vector3 pos = new Vector3(objData.x, objData.y, 0f);
+                        SpawnObject(objData.prefabIndex, pos);
+                    }
+                }
+            }
+        }
+    }
+
     public void SaveWorldObjects()
     {
-        string key = currentUser + "_" + currentWorld + "_objects";
+        StartCoroutine(SaveObjectsCoroutine());
+    }
 
-        List<string> objects = new List<string>();
-
+    private IEnumerator SaveObjectsCoroutine()
+    {
         foreach (GameObject obj in spawnedObjects)
         {
             int index = -1;
-
             for (int i = 0; i < availablePrefabs.Length; i++)
             {
                 if (obj.name.Contains(availablePrefabs[i].name))
@@ -326,78 +361,101 @@ public class AuthManager : MonoBehaviour
 
             if (index == -1) continue;
 
-            Vector3 pos = obj.transform.position;
+            ApiObject objectData = new ApiObject
+            {
+                environment2DId = currentEnvironmentId,
+                prefabIndex = index,
+                x = obj.transform.position.x,
+                y = obj.transform.position.y
+            };
 
-            string data = index + "|" +
-                          pos.x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
-                          pos.y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string jsonData = JsonUtility.ToJson(objectData);
 
-            objects.Add(data);
+            using (UnityWebRequest request = new UnityWebRequest($"{baseUrl}/Object2D", "POST"))
+            {
+                byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogError("Fout bij opslaan Object2D: " + request.error);
+                }
+            }
         }
-
-        PlayerPrefs.SetString(key, string.Join(",", objects));
-        PlayerPrefs.Save();
     }
 
-    // ================= CLEAR =================
     void ClearWorldObjects()
     {
         foreach (GameObject obj in spawnedObjects)
         {
-            Destroy(obj);
+            if (obj != null) Destroy(obj);
         }
-
         spawnedObjects.Clear();
     }
 
-    // ================= DELETE =================
-    public void DeleteWorld()
-    {
-        string key = currentUser + "_worlds";
-        string saved = PlayerPrefs.GetString(key, "");
-
-        List<string> worlds = new List<string>(saved.Split(','));
-        worlds.Remove(currentWorld);
-
-        PlayerPrefs.SetString(key, string.Join(",", worlds));
-        PlayerPrefs.DeleteKey(currentUser + "_" + currentWorld + "_objects");
-        PlayerPrefs.Save();
-
-        ClearWorldObjects();
-
-        worldPanel.SetActive(false);
-        homePanel.SetActive(true);
-
-        LoadWorlds();
-    }
-
+    // ================= UI NAVIGATION =================
     public void Logout()
     {
+        currentUser = null;
+        currentEnvironmentId = null;
         ClearWorldObjects();
 
         homePanel.SetActive(false);
+        worldPanel.SetActive(false);
+
+        loginUsernameInput.text = "";
+        loginPasswordInput.text = "";
+        loginErrorText.text = "";
+
         loginPanel.SetActive(true);
     }
 
     public void ShowRegister()
     {
+        registerErrorText.text = "";
+        usernameInput.text = "";
+        passwordInput.text = "";
         loginPanel.SetActive(false);
         registerPanel.SetActive(true);
     }
 
     public void ShowLogin()
     {
+        loginErrorText.text = "";
         registerPanel.SetActive(false);
         loginPanel.SetActive(true);
     }
 
     public void BackToHome()
     {
-        SaveWorldObjects(); // ⭐ BELANGRIJK
-
+        SaveWorldObjects();
         ClearWorldObjects();
-
         worldPanel.SetActive(false);
         homePanel.SetActive(true);
+        LoadEnvironments();
+    }
+}
+
+// ================= CUSTOM HELPER VOOR C# API ARRAYS =================
+public static class CustomJsonHelper
+{
+    public static T[] FromJson<T>(string json)
+    {
+        if (string.IsNullOrEmpty(json) || json == "[]" || json == "null" || !json.StartsWith("["))
+            return new T[0];
+
+        string newJson = "{ \"array\": " + json + "}";
+        Wrapper<T> wrapper = JsonUtility.FromJson<Wrapper<T>>(newJson);
+        return wrapper.array;
+    }
+
+    [System.Serializable]
+    private class Wrapper<T>
+    {
+        public T[] array;
     }
 }
