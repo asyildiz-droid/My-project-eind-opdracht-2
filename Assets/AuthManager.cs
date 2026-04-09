@@ -16,7 +16,6 @@ public class ApiUserCredentials
     public string password;
 }
 
-// ⭐ NIEUW: Model om de JSON respons van the API na het inloggen op te vangen
 [System.Serializable]
 public class ApiUserResponse
 {
@@ -35,19 +34,18 @@ public class ApiEnvironment
     public string userId;
 }
 
-// ⭐ GEFIXT: Voldoet exact aan de Dapper Postgres database eisen
+// ⭐ AANGEPAST OP VERZOEK: Verwijderd van "id" in het Object API model + juiste properties format.
 [System.Serializable]
 public class ApiObject
 {
-    public string id;
     public string prefabId;
     public string environment2DId;
     public float positionX;
     public float positionY;
-    public float scaleX = 1f;
-    public float scaleY = 1f;
-    public float rotationZ = 0f;
-    public int sortingLayer = 1;
+    public float scaleX;
+    public float scaleY;
+    public float rotationZ;
+    public int sortingLayer;
 }
 
 // ================= AUTH MANAGER =================
@@ -77,7 +75,7 @@ public class AuthManager : MonoBehaviour
     public GameObject[] availablePrefabs;
     public Transform worldObjectsContainer;
 
-    private string currentUser; // ⭐ Bevat nu het Database ID (bijv. "1") i.p.v. de naam
+    private string currentUser;
     private string currentEnvironmentId;
     private string currentEnvironmentName;
     private List<GameObject> spawnedObjects = new List<GameObject>();
@@ -151,7 +149,6 @@ public class AuthManager : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
-                // ⭐ GEFIXT: Pakt het echte ID uit de JSON response van the API!
                 ApiUserResponse response = JsonUtility.FromJson<ApiUserResponse>(request.downloadHandler.text);
                 currentUser = response.id.ToString();
 
@@ -197,7 +194,7 @@ public class AuthManager : MonoBehaviour
             name = envName,
             maxHeight = 10,
             maxLength = 10,
-            userId = currentUser // Dit is nu the foreign key ID!
+            userId = currentUser
         };
 
         string jsonData = JsonUtility.ToJson(newEnv);
@@ -347,14 +344,10 @@ public class AuthManager : MonoBehaviour
                     {
                         if (objData.environment2DId != currentEnvironmentId) continue;
 
-                        // Bij een echte load baseer je the instantiatie op The prefabId string in the toekomst
-                        // Hier zetten we het tijdelijk safe terug met een int parse als oude fallback (indien het cijfers waren).
                         if (int.TryParse(objData.prefabId, out int index))
                         {
                             Vector3 pos = new Vector3(objData.positionX, objData.positionY, 0f);
                             SpawnObject(index, pos);
-                            // Optioneel: Zet hier de scale en rotatie van het pas gespawnde object!
-                            // spawnedObjects[spawnedObjects.Count-1].transform.localScale = new Vector3(objData.scaleX, objData.scaleY, 1f);
                         }
                     }
                 }
@@ -362,30 +355,29 @@ public class AuthManager : MonoBehaviour
         }
     }
 
-    public void SaveWorldObjects()
+    public void SaveWorldObjects(System.Action onComplete = null)
     {
-        StartCoroutine(SaveObjectsCoroutine());
+        StartCoroutine(SaveObjectsCoroutine(onComplete));
     }
 
-    private IEnumerator SaveObjectsCoroutine()
+    private IEnumerator SaveObjectsCoroutine(System.Action onComplete)
     {
-        foreach (GameObject obj in spawnedObjects)
+        foreach (GameObject obj in spawnedObjects.ToArray())
         {
             if (obj == null) continue;
 
-            // ⭐ GEFIXT: Pakt de werkelijke naam van the prefab en trimt het "(Clone)" deel
             string cleanPrefabName = obj.name.Replace("(Clone)", "").Trim();
 
+            // ⭐ OPGELOST: Geen nep The API id meer insturen en exact de variabele namen matchen
             ApiObject objectData = new ApiObject
             {
-                id = "00000000-0000-0000-0000-000000000000",
                 prefabId = cleanPrefabName,
                 environment2DId = currentEnvironmentId,
-                positionX = obj.transform.position.x,      // Pakt the Unity transform positie X
-                positionY = obj.transform.position.y,      // Pakt the Unity transform positie Y
-                scaleX = obj.transform.localScale.x,       // Pakt the Unity scale X
-                scaleY = obj.transform.localScale.y,       // Pakt the Unity scale Y
-                rotationZ = obj.transform.eulerAngles.z,   // Pakt the Unity rotatie Z as
+                positionX = obj.transform.position.x,
+                positionY = obj.transform.position.y,
+                scaleX = obj.transform.localScale.x,
+                scaleY = obj.transform.localScale.y,
+                rotationZ = obj.transform.eulerAngles.z,
                 sortingLayer = 1
             };
 
@@ -406,11 +398,16 @@ public class AuthManager : MonoBehaviour
                 }
             }
         }
+
+        if (onComplete != null)
+        {
+            onComplete.Invoke();
+        }
     }
 
     void ClearWorldObjects()
     {
-        foreach (GameObject obj in spawnedObjects)
+        foreach (GameObject obj in spawnedObjects.ToArray())
         {
             if (obj != null) Destroy(obj);
         }
@@ -452,11 +449,13 @@ public class AuthManager : MonoBehaviour
 
     public void BackToHome()
     {
-        SaveWorldObjects();
-        ClearWorldObjects();
-        worldPanel.SetActive(false);
-        homePanel.SetActive(true);
-        LoadEnvironments();
+        SaveWorldObjects(() =>
+        {
+            ClearWorldObjects();
+            worldPanel.SetActive(false);
+            homePanel.SetActive(true);
+            LoadEnvironments();
+        });
     }
 }
 
