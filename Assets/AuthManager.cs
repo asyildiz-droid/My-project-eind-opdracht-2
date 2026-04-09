@@ -34,18 +34,19 @@ public class ApiEnvironment
     public string userId;
 }
 
-// ⭐ AANGEPAST OP VERZOEK: Verwijderd van "id" in het Object API model + juiste properties format.
+// ⭐ GEFIXT: Exact deze velden voor The Level Builder!
+// Geen fake ID meer, want dat laat de Postgres database crashen!
 [System.Serializable]
 public class ApiObject
 {
     public string prefabId;
-    public string environment2DId;
     public float positionX;
     public float positionY;
     public float scaleX;
     public float scaleY;
     public float rotationZ;
     public int sortingLayer;
+    public string environment2DId;
 }
 
 // ================= AUTH MANAGER =================
@@ -368,17 +369,17 @@ public class AuthManager : MonoBehaviour
 
             string cleanPrefabName = obj.name.Replace("(Clone)", "").Trim();
 
-            // ⭐ OPGELOST: Geen nep The API id meer insturen en exact de variabele namen matchen
+            // ⭐ GEFIXT: Vult uitsluitend de door Dapper geëiste eigenschappen! Geen vervuilende dummy ID's.
             ApiObject objectData = new ApiObject
             {
                 prefabId = cleanPrefabName,
-                environment2DId = currentEnvironmentId,
                 positionX = obj.transform.position.x,
                 positionY = obj.transform.position.y,
                 scaleX = obj.transform.localScale.x,
                 scaleY = obj.transform.localScale.y,
                 rotationZ = obj.transform.eulerAngles.z,
-                sortingLayer = 1
+                sortingLayer = 1,
+                environment2DId = currentEnvironmentId // Expliciet de juiste ingeladen guid ID
             };
 
             string jsonData = JsonUtility.ToJson(objectData);
@@ -394,7 +395,7 @@ public class AuthManager : MonoBehaviour
 
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError("Fout bij opslaan Object2D: " + request.error);
+                    Debug.LogError("Fout bij opslaan Object2D: " + request.error + "\nJSON Send: " + jsonData + "\nServer response: " + request.downloadHandler.text);
                 }
             }
         }
