@@ -7,12 +7,22 @@ using UnityEngine.UI;
 using UnityEngine.Networking;
 using System.Text;
 
-// ================= UNIEKE API MODELLEN (Hernoemd om alle fouten in Unity te voorkomen!) =================
+// ================= UNIEKE API MODELLEN =================
+
 [System.Serializable]
 public class ApiUserCredentials
 {
     public string userName;
     public string password;
+}
+
+// ⭐ NIEUW: Model om de JSON respons van the API na het inloggen op te vangen
+[System.Serializable]
+public class ApiUserResponse
+{
+    public int id;
+    public string userName;
+    public string passwordHash;
 }
 
 [System.Serializable]
@@ -25,14 +35,19 @@ public class ApiEnvironment
     public string userId;
 }
 
+// ⭐ GEFIXT: Voldoet exact aan de Dapper Postgres database eisen
 [System.Serializable]
 public class ApiObject
 {
     public string id;
+    public string prefabId;
     public string environment2DId;
-    public int prefabIndex;
-    public float x;
-    public float y;
+    public float positionX;
+    public float positionY;
+    public float scaleX = 1f;
+    public float scaleY = 1f;
+    public float rotationZ = 0f;
+    public int sortingLayer = 1;
 }
 
 // ================= AUTH MANAGER =================
@@ -60,16 +75,13 @@ public class AuthManager : MonoBehaviour
     public TMP_Text worldTitleText;
 
     public GameObject[] availablePrefabs;
-
     public Transform worldObjectsContainer;
 
-    private string currentUser;
+    private string currentUser; // ⭐ Bevat nu het Database ID (bijv. "1") i.p.v. de naam
     private string currentEnvironmentId;
     private string currentEnvironmentName;
-
     private List<GameObject> spawnedObjects = new List<GameObject>();
 
-    // De kloppende Live Render Base URL (Zonder schuine streep op het einde!)
     private readonly string baseUrl = "https://mysecurebackend.onrender.com";
 
     // ================= REGISTER & LOGIN =================
@@ -80,7 +92,7 @@ public class AuthManager : MonoBehaviour
 
         if (!IsValidPassword(password))
         {
-            registerErrorText.text = "Wachtwoord voldoet niet aan de eisen (min. 10 tekens, 1H, 1K, 1C, 1 Speciaalteken).";
+            registerErrorText.text = "Wachtwoord voldoet niet (min. 10 tekens, 1H, 1K, 1C, 1 Speciaalteken).";
             return;
         }
 
@@ -139,7 +151,9 @@ public class AuthManager : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
-                currentUser = username;
+                // ⭐ GEFIXT: Pakt het echte ID uit de JSON response van the API!
+                ApiUserResponse response = JsonUtility.FromJson<ApiUserResponse>(request.downloadHandler.text);
+                currentUser = response.id.ToString();
 
                 loginErrorText.text = "";
                 loginPanel.SetActive(false);
@@ -179,10 +193,11 @@ public class AuthManager : MonoBehaviour
 
         ApiEnvironment newEnv = new ApiEnvironment
         {
+            id = "00000000-0000-0000-0000-000000000000",
             name = envName,
             maxHeight = 10,
             maxLength = 10,
-            userId = currentUser
+            userId = currentUser // Dit is nu the foreign key ID!
         };
 
         string jsonData = JsonUtility.ToJson(newEnv);
@@ -332,8 +347,15 @@ public class AuthManager : MonoBehaviour
                     {
                         if (objData.environment2DId != currentEnvironmentId) continue;
 
-                        Vector3 pos = new Vector3(objData.x, objData.y, 0f);
-                        SpawnObject(objData.prefabIndex, pos);
+                        // Bij een echte load baseer je the instantiatie op The prefabId string in the toekomst
+                        // Hier zetten we het tijdelijk safe terug met een int parse als oude fallback (indien het cijfers waren).
+                        if (int.TryParse(objData.prefabId, out int index))
+                        {
+                            Vector3 pos = new Vector3(objData.positionX, objData.positionY, 0f);
+                            SpawnObject(index, pos);
+                            // Optioneel: Zet hier de scale en rotatie van het pas gespawnde object!
+                            // spawnedObjects[spawnedObjects.Count-1].transform.localScale = new Vector3(objData.scaleX, objData.scaleY, 1f);
+                        }
                     }
                 }
             }
@@ -349,24 +371,22 @@ public class AuthManager : MonoBehaviour
     {
         foreach (GameObject obj in spawnedObjects)
         {
-            int index = -1;
-            for (int i = 0; i < availablePrefabs.Length; i++)
-            {
-                if (obj.name.Contains(availablePrefabs[i].name))
-                {
-                    index = i;
-                    break;
-                }
-            }
+            if (obj == null) continue;
 
-            if (index == -1) continue;
+            // ⭐ GEFIXT: Pakt de werkelijke naam van the prefab en trimt het "(Clone)" deel
+            string cleanPrefabName = obj.name.Replace("(Clone)", "").Trim();
 
             ApiObject objectData = new ApiObject
             {
+                id = "00000000-0000-0000-0000-000000000000",
+                prefabId = cleanPrefabName,
                 environment2DId = currentEnvironmentId,
-                prefabIndex = index,
-                x = obj.transform.position.x,
-                y = obj.transform.position.y
+                positionX = obj.transform.position.x,      // Pakt the Unity transform positie X
+                positionY = obj.transform.position.y,      // Pakt the Unity transform positie Y
+                scaleX = obj.transform.localScale.x,       // Pakt the Unity scale X
+                scaleY = obj.transform.localScale.y,       // Pakt the Unity scale Y
+                rotationZ = obj.transform.eulerAngles.z,   // Pakt the Unity rotatie Z as
+                sortingLayer = 1
             };
 
             string jsonData = JsonUtility.ToJson(objectData);
